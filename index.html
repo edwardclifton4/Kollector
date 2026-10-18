@@ -14,15 +14,27 @@
   #reader { width: 100%; max-width: 480px; margin: 0 auto; }
   #status { text-align: center; min-height: 1.4em; padding: 8px; color: #9fd; }
   .row { display: flex; gap: 8px; padding: 0 16px 12px; }
-  input { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #1c1c1c; color: #eee; font-size: 1rem; }
+  input { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #1c1c1c; color: #eee; font-size: 1rem; min-width: 0; }
   button { padding: 10px 14px; border-radius: 8px; border: none; background: #2a6df4; color: #fff; font-size: 0.95rem; }
   button.secondary { background: #333; }
   button.danger { background: #7a2a2a; }
+  .tabs { display: flex; gap: 8px; padding: 0 16px 12px; }
+  .tabs button { flex: 1; }
+  .tabs button.inactive { background: #333; }
   #count { padding: 0 16px 8px; color: #999; font-size: 0.9rem; }
-  ul { list-style: none; margin: 0; padding: 0 16px 40px; }
+  h3 { margin: 16px 16px 4px; font-size: 1rem; color: #8ab4ff; }
+  ul { list-style: none; margin: 0; padding: 0 16px 24px; }
   li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #222; }
-  .title { cursor: pointer; flex: 1; }
-  .upc { color: #777; font-size: 0.8rem; }
+  .title { cursor: pointer; flex: 1; min-width: 0; }
+  .meta { color: #777; font-size: 0.8rem; }
+  .found .title { text-decoration: line-through; color: #777; }
+  .found-tag { color: #6c6; font-size: 0.8rem; }
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; padding: 16px; }
+  .card { background: #1c1c1c; padding: 20px; border-radius: 12px; max-width: 380px; width: 100%; box-sizing: border-box; }
+  .card h2 { margin: 0 0 8px; font-size: 1.3rem; }
+  .card p { margin: 0 0 16px; color: #aaa; }
+  .btns { display: flex; gap: 8px; }
+  .btns button { flex: 1; }
 </style>
 </head>
 <body>
@@ -36,23 +48,86 @@
 
 <div class="row">
   <input id="manualUpc" inputmode="numeric" placeholder="Or type a UPC">
-  <button id="manualBtn">Add</button>
+  <button id="manualBtn">Look up</button>
 </div>
 
-<div id="count"></div>
-<ul id="list"></ul>
+<div class="tabs">
+  <button id="tabColl">Collection</button>
+  <button id="tabWish" class="inactive">Wish list</button>
+</div>
+
+<div id="collView">
+  <div id="count"></div>
+  <div class="row"><button class="secondary" id="fillBtn" style="flex:1">Fill in missing genres</button></div>
+  <div id="collList"></div>
+</div>
+
+<div id="wishView" style="display:none">
+  <div class="row">
+    <input id="wishInput" placeholder="Movie title you're looking for">
+    <button id="wishBtn">Add</button>
+  </div>
+  <ul id="wishList"></ul>
+</div>
+
+<div id="modal">
+  <div class="card">
+    <h2 id="mTitle"></h2>
+    <p id="mMeta"></p>
+    <div class="btns">
+      <button id="mYes">Yes, add it</button>
+      <button id="mNo" class="secondary">No</button>
+    </div>
+  </div>
+</div>
 
 <script>
-const KEY = 'movieCollection';
-let items = JSON.parse(localStorage.getItem(KEY) || '[]');
-let busy = false;
-const scanner = new Html5Qrcode('reader');
-
+const KEY = 'movieCollection', WKEY = 'movieWishlist', TKEY = 'tmdbKey';
 const $ = id => document.getElementById(id);
 const status = msg => { $('status').textContent = msg; };
-const save = () => localStorage.setItem(KEY, JSON.stringify(items));
+const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const load = k => { try { return JSON.parse(localStorage.getItem(k) || '[]'); } catch (e) { return []; } };
+let items = load(KEY);
+let wishes = load(WKEY);
+let view = 'collection';
+let busy = false;
+let pending = null;
 
-async function lookupTitle(upc) {
+function persist() {
+  localStorage.setItem(KEY, JSON.stringify(items));
+  localStorage.setItem(WKEY, JSON.stringify(wishes));
+}
+
+function tmdbKey() {
+  let k = localStorage.getItem(TKEY);
+  if (!k) {
+    k = (prompt('Enter your TMDb API key (free at themoviedb.org, Settings > API). It stays on this phone.') || '').trim();
+    if (k) localStorage.setItem(TKEY, k);
+  }
+  return k;
+}
+
+async function tmdbSearch(title) {
+  const k = tmdbKey();
+  if (!k || !title) return null;
+  try {
+    const r = await fetch('https://api.themoviedb.org/3/search/movie?api_key=' + encodeURIComponent(k) + '&query=' + encodeURIComponent(title));
+    const j = await r.json();
+    const hit = j.results && j.results[0];
+    if (!hit) return null;
+    const d = await (await fetch('https://api.themoviedb.org/3/movie/' + hit.id + '?api_key=' + encodeURIComponent(k))).json();
+    return {
+      tmdbId: hit.id,
+      title: d.title || hit.title,
+      year: (d.release_date || '').slice(0, 4),
+      genres: (d.genres || []).map(g => g.name)
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+async function upcTitle(upc) {
   try {
     const r = await fetch('https://api.upcitemdb.com/prod/trial/lookup?upc=' + encodeURIComponent(upc));
     const j = await r.json();
@@ -62,81 +137,219 @@ async function lookupTitle(upc) {
   }
 }
 
-async function addUpc(upc) {
-  upc = upc.trim();
-  if (!upc) return;
-  if (items.some(i => i.upc === upc)) {
-    status('Already in your collection: ' + upc);
-    return;
+function cleanTitle(t) {
+  return (t || '')
+    .replace(/\[.*?\]|\(.*?\)/g, '')
+    .replace(/\b(blu-?ray|dvd|4k|uhd|steelbook)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function openModal(c) {
+  pending = c;
+  busy = true;
+  $('mTitle').textContent = c.title + (c.year ? ' (' + c.year + ')' : '');
+  $('mMeta').textContent = 'Genre: ' + (c.genres.length ? c.genres.join(', ') : 'not found');
+  $('modal').style.display = 'flex';
+}
+
+function closeModal() {
+  $('modal').style.display = 'none';
+  pending = null;
+  busy = false;
+}
+
+function confirmAdd() {
+  const c = pending;
+  if (!c) return;
+  items.push({
+    upc: c.upc,
+    title: c.title,
+    year: c.year,
+    tmdbId: c.tmdbId,
+    genres: c.genres.length ? c.genres : ['Uncategorized'],
+    added: new Date().toISOString()
+  });
+  const w = wishes.find(w => !w.found && ((c.tmdbId && w.tmdbId === c.tmdbId) || norm(w.title) === norm(c.title)));
+  if (w) {
+    w.found = true;
+    w.foundDate = new Date().toISOString();
+    status('Crossed off wish list: ' + w.title);
+  } else {
+    status('Added: ' + c.title);
   }
-  status('Looking up ' + upc + '...');
-  let title = await lookupTitle(upc);
-  if (!title) {
-    title = prompt('No match found for ' + upc + '. Enter the title (or cancel to skip):');
-    if (!title) { status('Skipped ' + upc); return; }
-  }
-  items.push({ upc, title, added: new Date().toISOString() });
-  save();
+  persist();
+  closeModal();
   render();
-  status('Added: ' + title);
+}
+
+async function handleScan(text) {
+  const upc = (text || '').trim();
+  if (!upc || busy) return;
+  busy = true;
+  try {
+    if (items.some(i => i.upc === upc)) {
+      status('Already in your collection');
+    } else {
+      status('Looking up ' + upc + '...');
+      let raw = await upcTitle(upc);
+      if (!raw) {
+        raw = prompt('No barcode match. Enter the title:');
+        if (!raw) { status('Skipped'); return; }
+      }
+      const info = await tmdbSearch(cleanTitle(raw));
+      status('');
+      openModal({
+        upc,
+        title: info ? info.title : cleanTitle(raw),
+        year: info ? info.year : '',
+        tmdbId: info ? info.tmdbId : null,
+        genres: info ? info.genres : []
+      });
+      return;
+    }
+  } catch (e) {
+    status('Error: ' + e);
+  }
+  setTimeout(() => { busy = false; }, 1500);
+}
+
+async function addWish() {
+  const t = $('wishInput').value.trim();
+  if (!t) return;
+  status('Searching...');
+  const info = await tmdbSearch(t);
+  const wish = {
+    title: info ? info.title : t,
+    year: info ? info.year : '',
+    tmdbId: info ? info.tmdbId : null,
+    found: false,
+    added: new Date().toISOString()
+  };
+  if (info && items.some(i => i.tmdbId === info.tmdbId)) {
+    wish.found = true;
+    wish.foundDate = new Date().toISOString();
+    status('You already own this one');
+  } else {
+    status('Added to wish list: ' + wish.title);
+  }
+  wishes.push(wish);
+  $('wishInput').value = '';
+  persist();
+  render();
+}
+
+async function fillGenres() {
+  const todo = items.filter(i => !i.genres || !i.genres.length || i.genres[0] === 'Uncategorized');
+  if (!todo.length) { status('Nothing to fill in'); return; }
+  let n = 0;
+  for (const it of todo) {
+    status('Filling genres: ' + (++n) + ' of ' + todo.length);
+    const info = await tmdbSearch(cleanTitle(it.title));
+    if (info) {
+      it.tmdbId = info.tmdbId;
+      it.year = info.year;
+      it.genres = info.genres.length ? info.genres : ['Uncategorized'];
+    }
+  }
+  persist();
+  render();
+  status('Done');
 }
 
 function render() {
+  $('collView').style.display = view === 'collection' ? 'block' : 'none';
+  $('wishView').style.display = view === 'wish' ? 'block' : 'none';
+  $('tabColl').className = view === 'collection' ? '' : 'inactive';
+  $('tabWish').className = view === 'wish' ? '' : 'inactive';
+  renderCollection();
+  renderWishes();
+}
+
+function renderCollection() {
   $('count').textContent = items.length + ' movies';
-  const list = $('list');
-  list.innerHTML = '';
-  items.slice().reverse().forEach((item, revIdx) => {
-    const idx = items.length - 1 - revIdx;
-    const li = document.createElement('li');
-    const text = document.createElement('div');
-    text.className = 'title';
-    text.innerHTML = '<div></div><div class="upc"></div>';
-    text.firstChild.textContent = item.title;
-    text.lastChild.textContent = item.upc;
-    text.onclick = () => {
-      const t = prompt('Edit title:', item.title);
-      if (t !== null && t.trim()) { items[idx].title = t.trim(); save(); render(); }
-    };
-    const del = document.createElement('button');
-    del.textContent = 'Delete';
-    del.className = 'danger';
-    del.onclick = () => {
-      if (confirm('Delete "' + item.title + '"?')) { items.splice(idx, 1); save(); render(); }
-    };
-    li.append(text, del);
-    list.appendChild(li);
+  const groups = {};
+  items.forEach((it, idx) => {
+    const g = (it.genres && it.genres[0]) || 'Uncategorized';
+    (groups[g] = groups[g] || []).push({ it, idx });
+  });
+  const box = $('collList');
+  box.innerHTML = '';
+  Object.keys(groups).sort().forEach(g => {
+    const h = document.createElement('h3');
+    h.textContent = g + ' (' + groups[g].length + ')';
+    box.appendChild(h);
+    const ul = document.createElement('ul');
+    groups[g].sort((a, b) => a.it.title.localeCompare(b.it.title)).forEach(({ it, idx }) => {
+      const li = document.createElement('li');
+      const t = document.createElement('div');
+      t.className = 'title';
+      t.textContent = it.title + (it.year ? ' (' + it.year + ')' : '');
+      t.onclick = () => {
+        const nt = prompt('Edit title:', it.title);
+        if (nt && nt.trim()) { items[idx].title = nt.trim(); persist(); render(); }
+      };
+      const del = document.createElement('button');
+      del.textContent = 'Delete';
+      del.className = 'danger';
+      del.onclick = () => {
+        if (confirm('Delete "' + it.title + '"?')) { items.splice(idx, 1); persist(); render(); }
+      };
+      li.append(t, del);
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
   });
 }
 
-async function onScan(text) {
-  if (busy) return;
-  busy = true;
-  try {
-    await addUpc(text);
-  } finally {
-    setTimeout(() => { busy = false; }, 1500);
-  }
+function renderWishes() {
+  const ul = $('wishList');
+  ul.innerHTML = '';
+  wishes.forEach((w, idx) => {
+    const li = document.createElement('li');
+    if (w.found) li.className = 'found';
+    const t = document.createElement('div');
+    t.className = 'title';
+    t.textContent = w.title + (w.year ? ' (' + w.year + ')' : '');
+    const tag = document.createElement('div');
+    tag.className = w.found ? 'found-tag' : 'meta';
+    tag.textContent = w.found ? 'Found' : 'Wanted';
+    t.appendChild(tag);
+    t.onclick = () => { wishes[idx].found = !wishes[idx].found; persist(); render(); };
+    const del = document.createElement('button');
+    del.textContent = 'Remove';
+    del.className = 'danger';
+    del.onclick = () => { wishes.splice(idx, 1); persist(); render(); };
+    li.append(t, del);
+    ul.appendChild(li);
+  });
 }
 
 function exportCsv() {
-  const rows = [['title', 'upc', 'added']];
-  items.forEach(i => rows.push([i.title, i.upc, i.added]));
+  const rows = [['title', 'year', 'genre', 'upc', 'added']];
+  items.forEach(i => rows.push([i.title, i.year || '', (i.genres || []).join('; '), i.upc, i.added]));
   const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  a.download = 'movie-collection.csv';
+  a.download = 'kollector.csv';
   a.click();
 }
 
-$('manualBtn').onclick = () => { addUpc($('manualUpc').value); $('manualUpc').value = ''; };
+$('mYes').onclick = confirmAdd;
+$('mNo').onclick = () => { status('Skipped'); closeModal(); };
+$('manualBtn').onclick = () => { handleScan($('manualUpc').value); $('manualUpc').value = ''; };
 $('exportBtn').onclick = exportCsv;
+$('fillBtn').onclick = fillGenres;
+$('wishBtn').onclick = addWish;
+$('tabColl').onclick = () => { view = 'collection'; render(); };
+$('tabWish').onclick = () => { view = 'wish'; render(); };
 
-scanner.start(
+new Html5Qrcode('reader').start(
   { facingMode: 'environment' },
   { fps: 10, qrbox: { width: 260, height: 160 }, formatsToSupport: [0, 3, 7] },
-  onScan,
+  handleScan,
   () => {}
-).catch(err => status('Camera error: ' + err + '. The page must be served over HTTPS and camera access allowed.'));
+).catch(err => status('Camera error: ' + err + '. Needs HTTPS and camera permission.'));
 
 render();
 </script>
