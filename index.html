@@ -31,12 +31,17 @@
   .found .title { text-decoration: line-through; color: #777; }
   .found-tag { color: #6c6; font-size: 0.8rem; }
   #modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; }
-  .card { background: #1c1c1c; padding: 20px; border-radius: 12px; max-width: 380px; width: 100%; box-sizing: border-box; }
+  .card { background: #1c1c1c; padding: 20px; border-radius: 12px; max-width: 380px; width: 100%; box-sizing: border-box; max-height: 90vh; overflow-y: auto; }
   .card h2 { margin: 0 0 8px; font-size: 1.2rem; }
   .card p { margin: 0 0 12px; color: #aaa; font-size: 0.9rem; }
   .card .row { padding: 0 0 12px; }
   .card .btns { display: flex; gap: 8px; flex-wrap: wrap; }
   .card .btns button { flex: 1; }
+  #mResults { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  #mResults button { background: #2b2b2b; text-align: left; }
+  #mResults button.sel { background: #2a6df4; }
+  .thumb { width: 46px; height: 69px; object-fit: cover; border-radius: 4px; background: #222; flex: 0 0 auto; }
+  .rowitem { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 </style>
 </head>
 <body>
@@ -63,7 +68,10 @@
 
 <div id="collView">
   <div id="count"></div>
-  <div class="row"><button class="secondary" id="fillBtn" style="flex:1">Fill in missing genres</button></div>
+  <div class="row">
+    <button class="secondary" id="fillBtn" style="flex:1">Fill in missing genres</button>
+    <button class="secondary" id="keyBtn">TMDb key</button>
+  </div>
   <div id="collList"></div>
 </div>
 
@@ -77,6 +85,7 @@
 
 <div id="modal">
   <div class="card">
+    <img id="mPoster" class="thumb" style="width:120px;height:180px;margin:0 0 12px" alt="">
     <h2 id="mTitle"></h2>
     <p id="mMeta"></p>
     <p id="mUpc"></p>
@@ -84,6 +93,7 @@
       <input id="mSearch" placeholder="Search by title">
       <button id="mSearchBtn" class="secondary">Search</button>
     </div>
+    <div id="mResults"></div>
     <div class="btns">
       <button id="mYes">Yes, add it</button>
       <button id="mNo" class="secondary">No</button>
@@ -103,12 +113,17 @@ let wishes = load(WKEY);
 let view = 'collection';
 let busy = false;
 let pending = null;
+let pendingResults = [];
+const BKEY = 'barcodeMap';
+let barcodeMap = load(BKEY);
+if (!barcodeMap || Array.isArray(barcodeMap)) barcodeMap = {};
 let cameraRunning = false;
 const scanner = new Html5Qrcode('reader');
 
 function persist() {
   localStorage.setItem(KEY, JSON.stringify(items));
   localStorage.setItem(WKEY, JSON.stringify(wishes));
+  localStorage.setItem(BKEY, JSON.stringify(barcodeMap));
 }
 
 /* ---------- Camera ---------- */
@@ -122,7 +137,6 @@ async function startCamera() {
       () => {}
     );
     cameraRunning = true;
-    localStorage.setItem('cameraGranted', '1');
   } catch (err) {
     cameraRunning = false;
     status('Camera error: ' + err + '. Check that camera access is allowed for this site in Settings > Safari.');
@@ -140,44 +154,49 @@ async function rescan() {
   if (cameraRunning) status('Camera ready. Point it at a barcode.');
 }
 
-/* ---------- TMDb / lookups ---------- */
+/* ---------- TMDb ---------- */
 function tmdbKey() {
   let k = localStorage.getItem(TKEY);
   if (!k) {
-    k = (prompt('Enter your TMDb API key (free at themoviedb.org, Settings > API). It stays on this phone.') || '').trim();
+    k = (prompt('Enter your TMDb API key (themoviedb.org > Settings > API). It stays on this phone.') || '').trim();
     if (k) localStorage.setItem(TKEY, k);
   }
   return k;
 }
 
-async function tmdbSearch(title) {
+async function tmdbApi(path, extra) {
   const k = tmdbKey();
-  if (!k || !title) return null;
+  if (!k) return { error: 'No TMDb key saved. Tap "TMDb key" to add one.' };
   try {
-    const r = await fetch('https://api.themoviedb.org/3/search/movie?api_key=' + encodeURIComponent(k) + '&query=' + encodeURIComponent(title));
-    const j = await r.json();
-    const hit = j.results && j.results[0];
-    if (!hit) return null;
-    const d = await (await fetch('https://api.themoviedb.org/3/movie/' + hit.id + '?api_key=' + encodeURIComponent(k))).json();
-    return {
-      tmdbId: hit.id,
-      title: d.title || hit.title,
-      year: (d.release_date || '').slice(0, 4),
-      genres: (d.genres || []).map(g => g.name)
-    };
+    const r = await fetch('https://api.themoviedb.org/3/' + path + '?api_key=' + encodeURIComponent(k) + (extra || ''));
+    if (r.status === 401) return { error: 'TMDb rejected your key. Tap "TMDb key" and enter it again.' };
+    if (!r.ok) return { error: 'TMDb returned error ' + r.status + '.' };
+    return { data: await r.json() };
   } catch (e) {
-    return null;
+    return { error: 'Could not reach TMDb. Check your connection.' };
   }
 }
 
-async function upcTitle(upc) {
-  try {
-    const r = await fetch('https://api.upcitemdb.com/prod/trial/lookup?upc=' + encodeURIComponent(upc));
-    const j = await r.json();
-    return (j.items && j.items[0] && j.items[0].title) || null;
-  } catch (e) {
-    return null;
-  }
+async function searchMovies(q) {
+  const r = await tmdbApi('search/movie', '&query=' + encodeURIComponent(q));
+  if (r.error) return { error: r.error };
+  return {
+    results: (r.data.results || []).slice(0, 5).map(h => ({
+      tmdbId: h.id, title: h.title, year: (h.release_date || '').slice(0, 4), poster: h.poster_path || null
+    }))
+  };
+}
+
+async function pickResult(hit) {
+  const r = await tmdbApi('movie/' + hit.tmdbId);
+  const genres = r.data ? (r.data.genres || []).map(g => g.name) : [];
+  return { tmdbId: hit.tmdbId, title: hit.title, year: hit.year, genres, poster: hit.poster };
+}
+
+async function fetchGenreAndYear(q) {
+  const s = await searchMovies(q);
+  if (s.error || !s.results.length) return s.error ? { error: s.error } : null;
+  return pickResult(s.results[0]);
 }
 
 function cleanTitle(t) {
@@ -188,19 +207,48 @@ function cleanTitle(t) {
     .trim();
 }
 
-/* ---------- Confirm modal ---------- */
-function showPending() {
-  const c = pending;
-  $('mTitle').textContent = c.title + (c.year ? ' (' + c.year + ')' : '');
-  $('mMeta').textContent = c.tmdbId
-    ? 'Genre: ' + (c.genres.length ? c.genres.join(', ') : 'not listed')
-    : 'No TMDb match. It will be saved as Uncategorized unless you search again.';
-  $('mUpc').textContent = c.upc ? 'Barcode: ' + c.upc : '';
-  $('mSearch').value = c.title;
+async function upcTitle(upc) {
+  try {
+    const r = await fetch('/api/lookup?upc=' + encodeURIComponent(upc));
+    const j = await r.json();
+    return j.title || null;
+  } catch (e) {
+    return null;
+  }
 }
 
-function openModal(c) {
+/* ---------- Confirm modal ---------- */
+function showPending(note) {
+  const c = pending;
+  $('mTitle').textContent = c.title + (c.year ? ' (' + c.year + ')' : '');
+  $('mMeta').textContent = note || (c.tmdbId
+    ? 'Genre: ' + (c.genres.length ? c.genres.join(', ') : 'not listed')
+    : 'No TMDb match. It will be saved as Uncategorized unless you pick a result.');
+  $('mUpc').textContent = c.upc ? 'Barcode: ' + c.upc : '';
+  const pi = $('mPoster');
+  if (c.poster) { pi.src = 'https://image.tmdb.org/t/p/w185' + c.poster; pi.style.display = 'block'; }
+  else { pi.removeAttribute('src'); pi.style.display = 'none'; }
+  $('mSearch').value = c.title;
+  const box = $('mResults');
+  box.innerHTML = '';
+  pendingResults.forEach(hit => {
+    const b = document.createElement('button');
+    b.textContent = hit.title + (hit.year ? ' (' + hit.year + ')' : '');
+    if (hit.tmdbId === c.tmdbId) b.className = 'sel';
+    b.onclick = async () => {
+      status('Loading...');
+      const p = await pickResult(hit);
+      Object.assign(pending, { upc: pending.upc, ...p });
+      status('');
+      showPending();
+    };
+    box.appendChild(b);
+  });
+}
+
+function openModal(c, results) {
   pending = c;
+  pendingResults = results || [];
   busy = true;
   showPending();
   $('modal').style.display = 'flex';
@@ -209,6 +257,7 @@ function openModal(c) {
 function closeModal() {
   $('modal').style.display = 'none';
   pending = null;
+  pendingResults = [];
   busy = false;
 }
 
@@ -216,17 +265,22 @@ async function searchInModal() {
   const q = $('mSearch').value.trim();
   if (!q || !pending) return;
   status('Searching...');
-  const info = await tmdbSearch(q);
-  if (info) {
-    Object.assign(pending, info);
-    status('');
-  } else {
-    pending.title = q;
-    pending.year = '';
-    pending.tmdbId = null;
-    pending.genres = [];
-    status('No match for "' + q + '". Try different words.');
+  const s = await searchMovies(q);
+  if (s.error) {
+    status(s.error);
+    showPending(s.error);
+    return;
   }
+  if (!s.results.length) {
+    pendingResults = [];
+    status('No results for "' + q + '". Try different words.');
+    showPending('No results for "' + q + '".');
+    return;
+  }
+  pendingResults = s.results;
+  const p = await pickResult(s.results[0]);
+  Object.assign(pending, p);
+  status('');
   showPending();
 }
 
@@ -237,10 +291,12 @@ function confirmAdd() {
     upc: c.upc || '',
     title: c.title,
     year: c.year,
-    tmdbId: c.tmdbId,
-    genres: c.genres.length ? c.genres : ['Uncategorized'],
+    tmdbId: c.tmdbId || null,
+    poster: c.poster || null,
+    genres: c.genres && c.genres.length ? c.genres : ['Uncategorized'],
     added: new Date().toISOString()
   });
+  if (c.upc) barcodeMap[c.upc] = { title: c.title, year: c.year, tmdbId: c.tmdbId || null, genres: c.genres || [], poster: c.poster || null };
   const w = wishes.find(w => !w.found && ((c.tmdbId && w.tmdbId === c.tmdbId) || norm(w.title) === norm(c.title)));
   if (w) {
     w.found = true;
@@ -263,6 +319,12 @@ async function handleScan(text) {
     if (items.some(i => i.upc === upc)) {
       status('Already in your collection');
     } else {
+      if (barcodeMap[upc]) {
+        const m = barcodeMap[upc];
+        openModal({ upc, ...m }, []);
+        busy = true;
+        return;
+      }
       status('Looking up ' + upc + '...');
       let raw = await upcTitle(upc);
       if (!raw) {
@@ -270,15 +332,20 @@ async function handleScan(text) {
         if (!raw) { status('Skipped'); busy = false; return; }
       }
       const q = cleanTitle(raw);
-      const info = await tmdbSearch(q);
+      const s = await searchMovies(q);
       status('');
-      openModal({
-        upc,
-        title: info ? info.title : q,
-        year: info ? info.year : '',
-        tmdbId: info ? info.tmdbId : null,
-        genres: info ? info.genres : []
-      });
+      if (s.error) {
+        openModal({ upc, title: q, year: '', tmdbId: null, genres: [] }, []);
+        showPending(s.error);
+        return;
+      }
+      if (!s.results.length) {
+        openModal({ upc, title: q, year: '', tmdbId: null, genres: [] }, []);
+        showPending('No TMDb results for "' + q + '". Search again or save as Uncategorized.');
+        return;
+      }
+      const p = await pickResult(s.results[0]);
+      openModal({ upc, ...p }, s.results);
       return;
     }
   } catch (e) {
@@ -292,19 +359,19 @@ async function addWish() {
   const t = $('wishInput').value.trim();
   if (!t) return;
   status('Searching...');
-  const info = await tmdbSearch(t);
-  const wish = {
-    title: info ? info.title : t,
-    year: info ? info.year : '',
-    tmdbId: info ? info.tmdbId : null,
-    found: false,
-    added: new Date().toISOString()
-  };
-  if (info && items.some(i => i.tmdbId === info.tmdbId)) {
+  const s = await searchMovies(t);
+  let wish = { title: t, year: '', tmdbId: null, found: false, added: new Date().toISOString() };
+  if (s.error) {
+    status(s.error + ' Saved as typed.');
+  } else if (s.results.length) {
+    const hit = s.results[0];
+    wish = { title: hit.title, year: hit.year, tmdbId: hit.tmdbId, found: false, added: new Date().toISOString() };
+  }
+  if (wish.tmdbId && items.some(i => i.tmdbId === wish.tmdbId)) {
     wish.found = true;
     wish.foundDate = new Date().toISOString();
     status('You already own this one');
-  } else {
+  } else if (!s.error) {
     status('Added to wish list: ' + wish.title);
   }
   wishes.push(wish);
@@ -320,7 +387,8 @@ async function fillGenres() {
   let n = 0;
   for (const it of todo) {
     status('Filling genres: ' + (++n) + ' of ' + todo.length);
-    const info = await tmdbSearch(cleanTitle(it.title));
+    const info = await fetchGenreAndYear(cleanTitle(it.title));
+    if (info && info.error) { status(info.error); break; }
     if (info) {
       it.tmdbId = info.tmdbId;
       it.year = info.year;
@@ -329,7 +397,13 @@ async function fillGenres() {
   }
   persist();
   render();
-  status('Done');
+  if (!status.lastError) status('Done');
+}
+
+function changeKey() {
+  localStorage.removeItem(TKEY);
+  const k = tmdbKey();
+  status(k ? 'TMDb key saved.' : 'No key entered.');
 }
 
 function render() {
@@ -360,6 +434,17 @@ function renderCollection() {
       const t = document.createElement('div');
       t.className = 'title';
       t.textContent = it.title + (it.year ? ' (' + it.year + ')' : '');
+      const wrap = document.createElement('div');
+      wrap.className = 'rowitem';
+      if (it.poster) {
+        const img = document.createElement('img');
+        img.className = 'thumb';
+        img.src = 'https://image.tmdb.org/t/p/w92' + it.poster;
+        img.alt = '';
+        img.loading = 'lazy';
+        wrap.appendChild(img);
+      }
+      wrap.appendChild(t);
       t.onclick = () => {
         const nt = prompt('Edit title:', it.title);
         if (nt && nt.trim()) { items[idx].title = nt.trim(); persist(); render(); }
@@ -370,7 +455,7 @@ function renderCollection() {
       del.onclick = () => {
         if (confirm('Delete "' + it.title + '"?')) { items.splice(idx, 1); persist(); render(); }
       };
-      li.append(t, del);
+      li.append(wrap, del);
       ul.appendChild(li);
     });
     box.appendChild(ul);
@@ -420,6 +505,7 @@ $('rescanBtn').onclick = rescan;
 $('manualBtn').onclick = () => { handleScan($('manualUpc').value); $('manualUpc').value = ''; };
 $('exportBtn').onclick = exportCsv;
 $('fillBtn').onclick = fillGenres;
+$('keyBtn').onclick = changeKey;
 $('wishBtn').onclick = addWish;
 $('tabColl').onclick = () => { view = 'collection'; render(); };
 $('tabWish').onclick = () => { view = 'wish'; render(); };
