@@ -10,8 +10,9 @@
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #111; color: #eee; }
-  header { padding: 12px 16px; font-size: 1.2rem; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
-  #reader { width: 100%; max-width: 480px; margin: 0 auto; }
+  header { padding: 12px 16px; font-size: 1.2rem; font-weight: 600; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  header .btns { display: flex; gap: 8px; }
+  #reader { width: 100%; max-width: 480px; margin: 0 auto; min-height: 60px; }
   #status { text-align: center; min-height: 1.4em; padding: 8px; color: #9fd; }
   .row { display: flex; gap: 8px; padding: 0 16px 12px; }
   input { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #1c1c1c; color: #eee; font-size: 1rem; min-width: 0; }
@@ -29,18 +30,22 @@
   .meta { color: #777; font-size: 0.8rem; }
   .found .title { text-decoration: line-through; color: #777; }
   .found-tag { color: #6c6; font-size: 0.8rem; }
-  #modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; padding: 16px; }
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; }
   .card { background: #1c1c1c; padding: 20px; border-radius: 12px; max-width: 380px; width: 100%; box-sizing: border-box; }
-  .card h2 { margin: 0 0 8px; font-size: 1.3rem; }
-  .card p { margin: 0 0 16px; color: #aaa; }
-  .btns { display: flex; gap: 8px; }
-  .btns button { flex: 1; }
+  .card h2 { margin: 0 0 8px; font-size: 1.2rem; }
+  .card p { margin: 0 0 12px; color: #aaa; font-size: 0.9rem; }
+  .card .row { padding: 0 0 12px; }
+  .card .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .card .btns button { flex: 1; }
 </style>
 </head>
 <body>
 <header>
   <span>Kollector</span>
-  <button class="secondary" id="exportBtn">Export CSV</button>
+  <div class="btns">
+    <button class="secondary" id="rescanBtn">Rescan</button>
+    <button class="secondary" id="exportBtn">Export CSV</button>
+  </div>
 </header>
 
 <div id="reader"></div>
@@ -74,9 +79,15 @@
   <div class="card">
     <h2 id="mTitle"></h2>
     <p id="mMeta"></p>
+    <p id="mUpc"></p>
+    <div class="row">
+      <input id="mSearch" placeholder="Search by title">
+      <button id="mSearchBtn" class="secondary">Search</button>
+    </div>
     <div class="btns">
       <button id="mYes">Yes, add it</button>
       <button id="mNo" class="secondary">No</button>
+      <button id="mRescan" class="secondary">Rescan</button>
     </div>
   </div>
 </div>
@@ -92,12 +103,44 @@ let wishes = load(WKEY);
 let view = 'collection';
 let busy = false;
 let pending = null;
+let cameraRunning = false;
+const scanner = new Html5Qrcode('reader');
 
 function persist() {
   localStorage.setItem(KEY, JSON.stringify(items));
   localStorage.setItem(WKEY, JSON.stringify(wishes));
 }
 
+/* ---------- Camera ---------- */
+async function startCamera() {
+  if (cameraRunning) return;
+  try {
+    await scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 260, height: 160 }, formatsToSupport: [0, 3, 7] },
+      handleScan,
+      () => {}
+    );
+    cameraRunning = true;
+    localStorage.setItem('cameraGranted', '1');
+  } catch (err) {
+    cameraRunning = false;
+    status('Camera error: ' + err + '. Check that camera access is allowed for this site in Settings > Safari.');
+  }
+}
+
+async function rescan() {
+  status('Restarting camera...');
+  if (cameraRunning) {
+    try { await scanner.stop(); } catch (e) {}
+    cameraRunning = false;
+  }
+  busy = false;
+  await startCamera();
+  if (cameraRunning) status('Camera ready. Point it at a barcode.');
+}
+
+/* ---------- TMDb / lookups ---------- */
 function tmdbKey() {
   let k = localStorage.getItem(TKEY);
   if (!k) {
@@ -145,11 +188,21 @@ function cleanTitle(t) {
     .trim();
 }
 
+/* ---------- Confirm modal ---------- */
+function showPending() {
+  const c = pending;
+  $('mTitle').textContent = c.title + (c.year ? ' (' + c.year + ')' : '');
+  $('mMeta').textContent = c.tmdbId
+    ? 'Genre: ' + (c.genres.length ? c.genres.join(', ') : 'not listed')
+    : 'No TMDb match. It will be saved as Uncategorized unless you search again.';
+  $('mUpc').textContent = c.upc ? 'Barcode: ' + c.upc : '';
+  $('mSearch').value = c.title;
+}
+
 function openModal(c) {
   pending = c;
   busy = true;
-  $('mTitle').textContent = c.title + (c.year ? ' (' + c.year + ')' : '');
-  $('mMeta').textContent = 'Genre: ' + (c.genres.length ? c.genres.join(', ') : 'not found');
+  showPending();
   $('modal').style.display = 'flex';
 }
 
@@ -159,11 +212,29 @@ function closeModal() {
   busy = false;
 }
 
+async function searchInModal() {
+  const q = $('mSearch').value.trim();
+  if (!q || !pending) return;
+  status('Searching...');
+  const info = await tmdbSearch(q);
+  if (info) {
+    Object.assign(pending, info);
+    status('');
+  } else {
+    pending.title = q;
+    pending.year = '';
+    pending.tmdbId = null;
+    pending.genres = [];
+    status('No match for "' + q + '". Try different words.');
+  }
+  showPending();
+}
+
 function confirmAdd() {
   const c = pending;
   if (!c) return;
   items.push({
-    upc: c.upc,
+    upc: c.upc || '',
     title: c.title,
     year: c.year,
     tmdbId: c.tmdbId,
@@ -183,6 +254,7 @@ function confirmAdd() {
   render();
 }
 
+/* ---------- Scanning ---------- */
 async function handleScan(text) {
   const upc = (text || '').trim();
   if (!upc || busy) return;
@@ -194,14 +266,15 @@ async function handleScan(text) {
       status('Looking up ' + upc + '...');
       let raw = await upcTitle(upc);
       if (!raw) {
-        raw = prompt('No barcode match. Enter the title:');
-        if (!raw) { status('Skipped'); return; }
+        raw = prompt('No barcode match for ' + upc + '. Enter the title (or cancel to skip):');
+        if (!raw) { status('Skipped'); busy = false; return; }
       }
-      const info = await tmdbSearch(cleanTitle(raw));
+      const q = cleanTitle(raw);
+      const info = await tmdbSearch(q);
       status('');
       openModal({
         upc,
-        title: info ? info.title : cleanTitle(raw),
+        title: info ? info.title : q,
         year: info ? info.year : '',
         tmdbId: info ? info.tmdbId : null,
         genres: info ? info.genres : []
@@ -214,6 +287,7 @@ async function handleScan(text) {
   setTimeout(() => { busy = false; }, 1500);
 }
 
+/* ---------- Wish list ---------- */
 async function addWish() {
   const t = $('wishInput').value.trim();
   if (!t) return;
@@ -239,6 +313,7 @@ async function addWish() {
   render();
 }
 
+/* ---------- Collection ---------- */
 async function fillGenres() {
   const todo = items.filter(i => !i.genres || !i.genres.length || i.genres[0] === 'Uncategorized');
   if (!todo.length) { status('Nothing to fill in'); return; }
@@ -327,7 +402,7 @@ function renderWishes() {
 
 function exportCsv() {
   const rows = [['title', 'year', 'genre', 'upc', 'added']];
-  items.forEach(i => rows.push([i.title, i.year || '', (i.genres || []).join('; '), i.upc, i.added]));
+  items.forEach(i => rows.push([i.title, i.year || '', (i.genres || []).join('; '), i.upc || '', i.added]));
   const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
@@ -335,8 +410,13 @@ function exportCsv() {
   a.click();
 }
 
+/* ---------- Wiring ---------- */
+$('mSearchBtn').onclick = searchInModal;
+$('mSearch').onkeydown = e => { if (e.key === 'Enter') searchInModal(); };
 $('mYes').onclick = confirmAdd;
 $('mNo').onclick = () => { status('Skipped'); closeModal(); };
+$('mRescan').onclick = () => { closeModal(); rescan(); };
+$('rescanBtn').onclick = rescan;
 $('manualBtn').onclick = () => { handleScan($('manualUpc').value); $('manualUpc').value = ''; };
 $('exportBtn').onclick = exportCsv;
 $('fillBtn').onclick = fillGenres;
@@ -344,13 +424,7 @@ $('wishBtn').onclick = addWish;
 $('tabColl').onclick = () => { view = 'collection'; render(); };
 $('tabWish').onclick = () => { view = 'wish'; render(); };
 
-new Html5Qrcode('reader').start(
-  { facingMode: 'environment' },
-  { fps: 10, qrbox: { width: 260, height: 160 }, formatsToSupport: [0, 3, 7] },
-  handleScan,
-  () => {}
-).catch(err => status('Camera error: ' + err + '. Needs HTTPS and camera permission.'));
-
+startCamera();
 render();
 </script>
 </body>
