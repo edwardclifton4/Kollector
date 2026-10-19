@@ -23,7 +23,8 @@
   .tabs { display: flex; gap: 8px; padding: 0 16px 12px; }
   .tabs button { flex: 1; }
   .tabs button.inactive { background: #333; }
-  .controls { display: flex; gap: 8px; padding: 0 16px 8px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 8px; }
+  .controls select { flex: 1 1 30%; }
   .note { padding: 0 16px 8px; color: #999; font-size: 0.85rem; }
   #count { padding: 0 16px 8px; color: #999; font-size: 0.9rem; }
   h3 { margin: 16px 16px 4px; font-size: 1rem; color: #8ab4ff; }
@@ -32,6 +33,10 @@
   .title { cursor: pointer; flex: 1; min-width: 0; }
   .rowitem { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
   .thumb { width: 46px; height: 69px; object-fit: cover; border-radius: 4px; background: #222; flex: 0 0 auto; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 0 12px 16px; }
+  .tile { cursor: pointer; min-width: 0; }
+  .tile img, .placeholder { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 4px; display: block; background: #222; box-sizing: border-box; }
+  .placeholder { display: flex; align-items: center; justify-content: center; text-align: center; font-size: 0.7rem; padding: 4px; color: #aaa; }
   .meta { color: #777; font-size: 0.8rem; }
   .found .title { text-decoration: line-through; color: #777; }
   .found-tag { color: #6c6; font-size: 0.8rem; }
@@ -73,6 +78,10 @@
 <div id="collView">
   <div id="count"></div>
   <div class="controls">
+    <select id="displayBy">
+      <option value="list">Show as list</option>
+      <option value="posters">Show posters</option>
+    </select>
     <select id="groupBy">
       <option value="genre">Group by genre</option>
       <option value="none">No grouping</option>
@@ -102,13 +111,15 @@
 <div id="exportModal" class="modal">
   <div class="card">
     <h2>Export</h2>
-    <p>Choose what to save.</p>
+    <p>Exports follow your current grouping and sort settings.</p>
     <div class="stack">
       <button id="exTitles">Titles only (.txt)</button>
       <button id="exGenre">Titles by genre (.txt)</button>
+      <button id="exPosters">Posters, 4 per row (.html)</button>
       <button id="exCsv">Full details (.csv)</button>
       <button id="exCancel" class="secondary">Cancel</button>
     </div>
+    <p style="margin-top:12px">To print posters, open the .html file on your phone and use Share → Print, or save it as a PDF.</p>
   </div>
 </div>
 
@@ -141,7 +152,7 @@ const load = (k, fallback) => { try { return JSON.parse(localStorage.getItem(k))
 let items = load(KEY, []);
 let wishes = load(WKEY, []);
 let barcodeMap = load(BKEY, {});
-let prefs = Object.assign({ groupBy: 'genre', sortBy: 'az' }, load(PKEY, {}));
+let prefs = Object.assign({ groupBy: 'genre', sortBy: 'az', display: 'list' }, load(PKEY, {}));
 let view = 'collection';
 let busy = false;
 let pending = null;
@@ -471,6 +482,42 @@ function makeItemRow(entry) {
   return li;
 }
 
+function makePosterTile(entry) {
+  const { it, idx } = entry;
+  const d = document.createElement('div');
+  d.className = 'tile';
+  if (it.poster) {
+    const img = document.createElement('img');
+    img.src = 'https://image.tmdb.org/t/p/w185' + it.poster;
+    img.alt = it.title;
+    img.loading = 'lazy';
+    d.appendChild(img);
+  } else {
+    const p = document.createElement('div');
+    p.className = 'placeholder';
+    p.textContent = it.title;
+    d.appendChild(p);
+  }
+  // Tap a poster to delete it. Use list view to edit titles.
+  d.onclick = () => {
+    if (confirm('Delete "' + it.title + '"?')) { items.splice(idx, 1); persist(); render(); }
+  };
+  return d;
+}
+
+function appendEntries(container, list) {
+  if (prefs.display === 'posters') {
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    list.forEach(e => grid.appendChild(makePosterTile(e)));
+    container.appendChild(grid);
+  } else {
+    const ul = document.createElement('ul');
+    list.forEach(e => ul.appendChild(makeItemRow(e)));
+    container.appendChild(ul);
+  }
+}
+
 function renderCollection() {
   $('count').textContent = items.length + ' movies';
   const entries = sortEntries(items.map((it, idx) => ({ it, idx })));
@@ -483,14 +530,10 @@ function renderCollection() {
       const h = document.createElement('h3');
       h.textContent = g + ' (' + groups[g].length + ')';
       box.appendChild(h);
-      const ul = document.createElement('ul');
-      groups[g].forEach(e => ul.appendChild(makeItemRow(e)));
-      box.appendChild(ul);
+      appendEntries(box, groups[g]);
     });
   } else {
-    const ul = document.createElement('ul');
-    entries.forEach(e => ul.appendChild(makeItemRow(e)));
-    box.appendChild(ul);
+    appendEntries(box, entries);
   }
 
   const missing = items.filter(needsGenre).length;
@@ -554,6 +597,7 @@ function render() {
   $('wishView').style.display = view === 'wish' ? 'block' : 'none';
   $('tabColl').className = view === 'collection' ? '' : 'inactive';
   $('tabWish').className = view === 'wish' ? '' : 'inactive';
+  $('displayBy').value = prefs.display;
   $('groupBy').value = prefs.groupBy;
   $('sortBy').value = prefs.sortBy;
   renderCollection();
@@ -583,6 +627,33 @@ function exportByGenre() {
   download(text + '\n', 'kollector-by-genre.txt', 'text/plain');
 }
 
+function exportPosters() {
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const entries = sortEntries(items.map((it, idx) => ({ it, idx })));
+  const tile = e => e.it.poster
+    ? '<div class="p"><img src="https://image.tmdb.org/t/p/w342' + esc(e.it.poster) + '" alt="' + esc(e.it.title) + '"></div>'
+    : '<div class="p"><div class="ph">' + esc(e.it.title) + '</div></div>';
+  let body = '';
+  if (prefs.groupBy === 'genre') {
+    const groups = groupEntries(entries);
+    Object.keys(groups).sort().forEach(g => {
+      body += '<h2>' + esc(g) + ' (' + groups[g].length + ')</h2><div class="grid">' + groups[g].map(tile).join('') + '</div>';
+    });
+  } else {
+    body = '<div class="grid">' + entries.map(tile).join('') + '</div>';
+  }
+  const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
+    '<title>Kollector posters</title><style>' +
+    'body{font-family:-apple-system,system-ui,sans-serif;margin:16px;background:#fff;color:#111}' +
+    'h1{font-size:20px}h2{margin:24px 0 8px;font-size:16px}' +
+    '.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}' +
+    '.p img,.ph{width:100%;aspect-ratio:2/3;object-fit:cover;display:block;border-radius:4px;background:#ddd}' +
+    '.ph{display:flex;align-items:center;justify-content:center;text-align:center;font-size:11px;padding:4px;box-sizing:border-box}' +
+    '@media print{body{margin:0}h2{break-after:avoid}}' +
+    '</style></head><body><h1>Kollector</h1>' + body + '</body></html>';
+  download(html, 'kollector-posters.html', 'text/html');
+}
+
 function exportCsv() {
   const rows = [['title', 'year', 'genre', 'upc', 'added']];
   items.forEach(i => rows.push([i.title, i.year || '', (i.genres || []).join('; '), i.upc || '', i.added]));
@@ -598,7 +669,9 @@ $('exportBtn').onclick = () => { $('exportModal').style.display = 'flex'; };
 $('exCancel').onclick = () => { $('exportModal').style.display = 'none'; };
 $('exTitles').onclick = () => { $('exportModal').style.display = 'none'; exportTitles(); };
 $('exGenre').onclick = () => { $('exportModal').style.display = 'none'; exportByGenre(); };
+$('exPosters').onclick = () => { $('exportModal').style.display = 'none'; exportPosters(); };
 $('exCsv').onclick = () => { $('exportModal').style.display = 'none'; exportCsv(); };
+$('displayBy').onchange = e => { prefs.display = e.target.value; persist(); render(); };
 $('groupBy').onchange = e => { prefs.groupBy = e.target.value; persist(); render(); };
 $('sortBy').onchange = e => { prefs.sortBy = e.target.value; persist(); render(); };
 $('fillBtn').onclick = fillGenres;
