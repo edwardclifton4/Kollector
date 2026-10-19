@@ -70,7 +70,6 @@
   <div id="count"></div>
   <div class="row">
     <button class="secondary" id="fillBtn" style="flex:1">Fill in missing genres</button>
-    <button class="secondary" id="keyBtn">TMDb key</button>
   </div>
   <div id="collList"></div>
 </div>
@@ -155,25 +154,16 @@ async function rescan() {
 }
 
 /* ---------- TMDb ---------- */
-function tmdbKey() {
-  let k = localStorage.getItem(TKEY);
-  if (!k) {
-    k = (prompt('Enter your TMDb API key (themoviedb.org > Settings > API). It stays on this phone.') || '').trim();
-    if (k) localStorage.setItem(TKEY, k);
-  }
-  return k;
-}
-
 async function tmdbApi(path, extra) {
-  const k = tmdbKey();
-  if (!k) return { error: 'No TMDb key saved. Tap "TMDb key" to add one.' };
   try {
-    const r = await fetch('https://api.themoviedb.org/3/' + path + '?api_key=' + encodeURIComponent(k) + (extra || ''));
-    if (r.status === 401) return { error: 'TMDb rejected your key. Tap "TMDb key" and enter it again.' };
-    if (!r.ok) return { error: 'TMDb returned error ' + r.status + '.' };
+    const r = await fetch('/api/tmdb?path=' + encodeURIComponent(path) + (extra || ''));
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      return { error: j.error || ('Lookup failed (' + r.status + ').') };
+    }
     return { data: await r.json() };
   } catch (e) {
-    return { error: 'Could not reach TMDb. Check your connection.' };
+    return { error: 'Could not reach the lookup service. Check your connection.' };
   }
 }
 
@@ -400,11 +390,6 @@ async function fillGenres() {
   if (!status.lastError) status('Done');
 }
 
-function changeKey() {
-  localStorage.removeItem(TKEY);
-  const k = tmdbKey();
-  status(k ? 'TMDb key saved.' : 'No key entered.');
-}
 
 function render() {
   $('collView').style.display = view === 'collection' ? 'block' : 'none';
@@ -505,7 +490,6 @@ $('rescanBtn').onclick = rescan;
 $('manualBtn').onclick = () => { handleScan($('manualUpc').value); $('manualUpc').value = ''; };
 $('exportBtn').onclick = exportCsv;
 $('fillBtn').onclick = fillGenres;
-$('keyBtn').onclick = changeKey;
 $('wishBtn').onclick = addWish;
 $('tabColl').onclick = () => { view = 'collection'; render(); };
 $('tabWish').onclick = () => { view = 'wish'; render(); };
