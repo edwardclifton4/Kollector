@@ -11,54 +11,58 @@
   :root { color-scheme: dark; }
   body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #111; color: #eee; }
   header { padding: 12px 16px; font-size: 1.2rem; font-weight: 600; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  header .btns { display: flex; gap: 8px; }
-  #reader { width: 100%; max-width: 480px; margin: 0 auto; min-height: 60px; }
-  #status { text-align: center; min-height: 1.4em; padding: 8px; color: #9fd; }
-  .row { display: flex; gap: 8px; padding: 0 16px 12px; }
-  input { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #1c1c1c; color: #eee; font-size: 1rem; min-width: 0; }
+  .row { display: flex; gap: 8px; padding: 0 16px 12px; align-items: center; }
+  input, select { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #1c1c1c; color: #eee; font-size: 1rem; min-width: 0; }
   button { padding: 10px 14px; border-radius: 8px; border: none; background: #2a6df4; color: #fff; font-size: 0.95rem; }
   button.secondary { background: #333; }
   button.danger { background: #7a2a2a; }
+  button.big { width: 100%; padding: 14px; font-size: 1.05rem; }
+  #scanArea { padding: 0 16px 12px; }
+  #reader { width: 100%; max-width: 480px; margin: 0 auto; }
+  #status { text-align: center; min-height: 1.4em; padding: 4px 8px 8px; color: #9fd; }
   .tabs { display: flex; gap: 8px; padding: 0 16px 12px; }
   .tabs button { flex: 1; }
   .tabs button.inactive { background: #333; }
+  .controls { display: flex; gap: 8px; padding: 0 16px 8px; }
+  .note { padding: 0 16px 8px; color: #999; font-size: 0.85rem; }
   #count { padding: 0 16px 8px; color: #999; font-size: 0.9rem; }
   h3 { margin: 16px 16px 4px; font-size: 1rem; color: #8ab4ff; }
   ul { list-style: none; margin: 0; padding: 0 16px 24px; }
   li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #222; }
   .title { cursor: pointer; flex: 1; min-width: 0; }
+  .rowitem { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+  .thumb { width: 46px; height: 69px; object-fit: cover; border-radius: 4px; background: #222; flex: 0 0 auto; }
   .meta { color: #777; font-size: 0.8rem; }
   .found .title { text-decoration: line-through; color: #777; }
   .found-tag { color: #6c6; font-size: 0.8rem; }
-  #modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; }
   .card { background: #1c1c1c; padding: 20px; border-radius: 12px; max-width: 380px; width: 100%; box-sizing: border-box; max-height: 90vh; overflow-y: auto; }
   .card h2 { margin: 0 0 8px; font-size: 1.2rem; }
   .card p { margin: 0 0 12px; color: #aaa; font-size: 0.9rem; }
   .card .row { padding: 0 0 12px; }
   .card .btns { display: flex; gap: 8px; flex-wrap: wrap; }
   .card .btns button { flex: 1; }
+  .card .stack { display: flex; flex-direction: column; gap: 8px; }
   #mResults { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   #mResults button { background: #2b2b2b; text-align: left; }
   #mResults button.sel { background: #2a6df4; }
-  .thumb { width: 46px; height: 69px; object-fit: cover; border-radius: 4px; background: #222; flex: 0 0 auto; }
-  .rowitem { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 </style>
 </head>
 <body>
 <header>
   <span>Kollector</span>
-  <div class="btns">
-    <button class="secondary" id="rescanBtn">Rescan</button>
-    <button class="secondary" id="exportBtn">Export CSV</button>
-  </div>
+  <button class="secondary" id="exportBtn">Export</button>
 </header>
 
-<div id="reader"></div>
+<div id="scanArea">
+  <button class="big" id="scanBtn">Scan</button>
+  <div id="reader" style="display:none"></div>
+</div>
 <div id="status"></div>
 
 <div class="row">
-  <input id="manualUpc" inputmode="numeric" placeholder="Or type a UPC">
-  <button id="manualBtn">Look up</button>
+  <input id="searchInput" placeholder="Type a UPC or movie title">
+  <button id="searchBtn">Search</button>
 </div>
 
 <div class="tabs">
@@ -68,8 +72,21 @@
 
 <div id="collView">
   <div id="count"></div>
-  <div class="row">
-    <button class="secondary" id="fillBtn" style="flex:1">Fill in missing genres</button>
+  <div class="controls">
+    <select id="groupBy">
+      <option value="genre">Group by genre</option>
+      <option value="none">No grouping</option>
+    </select>
+    <select id="sortBy">
+      <option value="az">Title A–Z</option>
+      <option value="year_new">Year, newest first</option>
+      <option value="year_old">Year, oldest first</option>
+      <option value="added">Recently added</option>
+    </select>
+  </div>
+  <div id="genreNote" class="note" style="display:none"></div>
+  <div class="row" id="fillRow" style="display:none">
+    <button class="secondary" id="fillBtn" style="flex:1"></button>
   </div>
   <div id="collList"></div>
 </div>
@@ -82,7 +99,20 @@
   <ul id="wishList"></ul>
 </div>
 
-<div id="modal">
+<div id="exportModal" class="modal">
+  <div class="card">
+    <h2>Export</h2>
+    <p>Choose what to save.</p>
+    <div class="stack">
+      <button id="exTitles">Titles only (.txt)</button>
+      <button id="exGenre">Titles by genre (.txt)</button>
+      <button id="exCsv">Full details (.csv)</button>
+      <button id="exCancel" class="secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal" class="modal">
   <div class="card">
     <img id="mPoster" class="thumb" style="width:120px;height:180px;margin:0 0 12px" alt="">
     <h2 id="mTitle"></h2>
@@ -96,26 +126,26 @@
     <div class="btns">
       <button id="mYes">Yes, add it</button>
       <button id="mNo" class="secondary">No</button>
-      <button id="mRescan" class="secondary">Rescan</button>
+      <button id="mRescan" class="secondary">Scan next</button>
     </div>
   </div>
 </div>
 
 <script>
-const KEY = 'movieCollection', WKEY = 'movieWishlist', TKEY = 'tmdbKey';
+const KEY = 'movieCollection', WKEY = 'movieWishlist', BKEY = 'barcodeMap', PKEY = 'viewPrefs';
 const $ = id => document.getElementById(id);
 const status = msg => { $('status').textContent = msg; };
 const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-const load = k => { try { return JSON.parse(localStorage.getItem(k) || '[]'); } catch (e) { return []; } };
-let items = load(KEY);
-let wishes = load(WKEY);
+const load = (k, fallback) => { try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch (e) { return fallback; } };
+
+let items = load(KEY, []);
+let wishes = load(WKEY, []);
+let barcodeMap = load(BKEY, {});
+let prefs = Object.assign({ groupBy: 'genre', sortBy: 'az' }, load(PKEY, {}));
 let view = 'collection';
 let busy = false;
 let pending = null;
 let pendingResults = [];
-const BKEY = 'barcodeMap';
-let barcodeMap = load(BKEY);
-if (!barcodeMap || Array.isArray(barcodeMap)) barcodeMap = {};
 let cameraRunning = false;
 const scanner = new Html5Qrcode('reader');
 
@@ -123,11 +153,13 @@ function persist() {
   localStorage.setItem(KEY, JSON.stringify(items));
   localStorage.setItem(WKEY, JSON.stringify(wishes));
   localStorage.setItem(BKEY, JSON.stringify(barcodeMap));
+  localStorage.setItem(PKEY, JSON.stringify(prefs));
 }
 
 /* ---------- Camera ---------- */
 async function startCamera() {
   if (cameraRunning) return;
+  $('reader').style.display = 'block';
   try {
     await scanner.start(
       { facingMode: 'environment' },
@@ -136,24 +168,29 @@ async function startCamera() {
       () => {}
     );
     cameraRunning = true;
+    $('scanBtn').textContent = 'Stop scanning';
+    status('Point the camera at a barcode.');
   } catch (err) {
-    cameraRunning = false;
+    $('reader').style.display = 'none';
     status('Camera error: ' + err + '. Check that camera access is allowed for this site in Settings > Safari.');
   }
 }
 
-async function rescan() {
-  status('Restarting camera...');
-  if (cameraRunning) {
-    try { await scanner.stop(); } catch (e) {}
-    cameraRunning = false;
-  }
-  busy = false;
-  await startCamera();
-  if (cameraRunning) status('Camera ready. Point it at a barcode.');
+async function stopCamera() {
+  if (!cameraRunning) return;
+  try { await scanner.stop(); } catch (e) {}
+  cameraRunning = false;
+  $('reader').style.display = 'none';
+  $('scanBtn').textContent = 'Scan';
 }
 
-/* ---------- TMDb ---------- */
+async function rescan() {
+  await stopCamera();
+  busy = false;
+  await startCamera();
+}
+
+/* ---------- TMDb (via server proxy) ---------- */
 async function tmdbApi(path, extra) {
   try {
     const r = await fetch('/api/tmdb?path=' + encodeURIComponent(path) + (extra || ''));
@@ -185,7 +222,8 @@ async function pickResult(hit) {
 
 async function fetchGenreAndYear(q) {
   const s = await searchMovies(q);
-  if (s.error || !s.results.length) return s.error ? { error: s.error } : null;
+  if (s.error) return { error: s.error };
+  if (!s.results.length) return null;
   return pickResult(s.results[0]);
 }
 
@@ -212,7 +250,7 @@ function showPending(note) {
   const c = pending;
   $('mTitle').textContent = c.title + (c.year ? ' (' + c.year + ')' : '');
   $('mMeta').textContent = note || (c.tmdbId
-    ? 'Genre: ' + (c.genres.length ? c.genres.join(', ') : 'not listed')
+    ? 'Genre: ' + (c.genres && c.genres.length ? c.genres.join(', ') : 'not listed')
     : 'No TMDb match. It will be saved as Uncategorized unless you pick a result.');
   $('mUpc').textContent = c.upc ? 'Barcode: ' + c.upc : '';
   const pi = $('mPoster');
@@ -228,7 +266,7 @@ function showPending(note) {
     b.onclick = async () => {
       status('Loading...');
       const p = await pickResult(hit);
-      Object.assign(pending, { upc: pending.upc, ...p });
+      Object.assign(pending, p);
       status('');
       showPending();
     };
@@ -256,20 +294,15 @@ async function searchInModal() {
   if (!q || !pending) return;
   status('Searching...');
   const s = await searchMovies(q);
-  if (s.error) {
-    status(s.error);
-    showPending(s.error);
-    return;
-  }
+  if (s.error) { status(s.error); showPending(s.error); return; }
   if (!s.results.length) {
     pendingResults = [];
-    status('No results for "' + q + '". Try different words.');
+    status('');
     showPending('No results for "' + q + '".');
     return;
   }
   pendingResults = s.results;
-  const p = await pickResult(s.results[0]);
-  Object.assign(pending, p);
+  Object.assign(pending, await pickResult(s.results[0]));
   status('');
   showPending();
 }
@@ -286,7 +319,9 @@ function confirmAdd() {
     genres: c.genres && c.genres.length ? c.genres : ['Uncategorized'],
     added: new Date().toISOString()
   });
-  if (c.upc) barcodeMap[c.upc] = { title: c.title, year: c.year, tmdbId: c.tmdbId || null, genres: c.genres || [], poster: c.poster || null };
+  if (c.upc) {
+    barcodeMap[c.upc] = { title: c.title, year: c.year, tmdbId: c.tmdbId || null, genres: c.genres || [], poster: c.poster || null };
+  }
   const w = wishes.find(w => !w.found && ((c.tmdbId && w.tmdbId === c.tmdbId) || norm(w.title) === norm(c.title)));
   if (w) {
     w.found = true;
@@ -300,7 +335,7 @@ function confirmAdd() {
   render();
 }
 
-/* ---------- Scanning ---------- */
+/* ---------- Scanning and searching ---------- */
 async function handleScan(text) {
   const upc = (text || '').trim();
   if (!upc || busy) return;
@@ -308,13 +343,10 @@ async function handleScan(text) {
   try {
     if (items.some(i => i.upc === upc)) {
       status('Already in your collection');
+    } else if (barcodeMap[upc]) {
+      openModal({ upc, ...barcodeMap[upc] }, []);
+      return;
     } else {
-      if (barcodeMap[upc]) {
-        const m = barcodeMap[upc];
-        openModal({ upc, ...m }, []);
-        busy = true;
-        return;
-      }
       status('Looking up ' + upc + '...');
       let raw = await upcTitle(upc);
       if (!raw) {
@@ -324,14 +356,9 @@ async function handleScan(text) {
       const q = cleanTitle(raw);
       const s = await searchMovies(q);
       status('');
-      if (s.error) {
+      if (s.error || !s.results.length) {
         openModal({ upc, title: q, year: '', tmdbId: null, genres: [] }, []);
-        showPending(s.error);
-        return;
-      }
-      if (!s.results.length) {
-        openModal({ upc, title: q, year: '', tmdbId: null, genres: [] }, []);
-        showPending('No TMDb results for "' + q + '". Search again or save as Uncategorized.');
+        showPending(s.error || 'No TMDb results for "' + q + '". Search again or save as Uncategorized.');
         return;
       }
       const p = await pickResult(s.results[0]);
@@ -342,6 +369,24 @@ async function handleScan(text) {
     status('Error: ' + e);
   }
   setTimeout(() => { busy = false; }, 1500);
+}
+
+async function searchTitle() {
+  const q = $('searchInput').value.trim();
+  if (!q) return;
+  $('searchInput').value = '';
+  if (/^\d{8,14}$/.test(q)) return handleScan(q);
+  status('Searching...');
+  const s = await searchMovies(q);
+  if (s.error) { status(s.error); return; }
+  if (!s.results.length) { status('No results for "' + q + '".'); return; }
+  const p = await pickResult(s.results[0]);
+  if (items.some(i => i.tmdbId === p.tmdbId)) {
+    status('Already in your collection: ' + p.title);
+    return;
+  }
+  status('');
+  openModal({ upc: '', ...p }, s.results);
 }
 
 /* ---------- Wish list ---------- */
@@ -370,81 +415,115 @@ async function addWish() {
   render();
 }
 
-/* ---------- Collection ---------- */
+/* ---------- Collection: sorting, grouping, rendering ---------- */
+function needsGenre(it) {
+  return !it.genres || !it.genres.length || it.genres[0] === 'Uncategorized';
+}
+
+function sortEntries(entries) {
+  const yr = e => Number(e.it.year) || 0;
+  const cmp = {
+    az: (a, b) => a.it.title.localeCompare(b.it.title),
+    year_new: (a, b) => (yr(b) - yr(a)) || a.it.title.localeCompare(b.it.title),
+    year_old: (a, b) => (yr(a) - yr(b)) || a.it.title.localeCompare(b.it.title),
+    added: (a, b) => (b.it.added || '').localeCompare(a.it.added || '')
+  }[prefs.sortBy] || ((a, b) => a.it.title.localeCompare(b.it.title));
+  return entries.sort(cmp);
+}
+
+function groupEntries(entries) {
+  const groups = {};
+  entries.forEach(e => {
+    const g = (e.it.genres && e.it.genres[0]) || 'Uncategorized';
+    (groups[g] = groups[g] || []).push(e);
+  });
+  return groups;
+}
+
+function makeItemRow(entry) {
+  const { it, idx } = entry;
+  const li = document.createElement('li');
+  const wrap = document.createElement('div');
+  wrap.className = 'rowitem';
+  if (it.poster) {
+    const img = document.createElement('img');
+    img.className = 'thumb';
+    img.src = 'https://image.tmdb.org/t/p/w92' + it.poster;
+    img.alt = '';
+    img.loading = 'lazy';
+    wrap.appendChild(img);
+  }
+  const t = document.createElement('div');
+  t.className = 'title';
+  t.textContent = it.title + (it.year ? ' (' + it.year + ')' : '');
+  t.onclick = () => {
+    const nt = prompt('Edit title:', it.title);
+    if (nt && nt.trim()) { items[idx].title = nt.trim(); persist(); render(); }
+  };
+  wrap.appendChild(t);
+  const del = document.createElement('button');
+  del.textContent = 'Delete';
+  del.className = 'danger';
+  del.onclick = () => {
+    if (confirm('Delete "' + it.title + '"?')) { items.splice(idx, 1); persist(); render(); }
+  };
+  li.append(wrap, del);
+  return li;
+}
+
+function renderCollection() {
+  $('count').textContent = items.length + ' movies';
+  const entries = sortEntries(items.map((it, idx) => ({ it, idx })));
+  const box = $('collList');
+  box.innerHTML = '';
+
+  if (prefs.groupBy === 'genre') {
+    const groups = groupEntries(entries);
+    Object.keys(groups).sort().forEach(g => {
+      const h = document.createElement('h3');
+      h.textContent = g + ' (' + groups[g].length + ')';
+      box.appendChild(h);
+      const ul = document.createElement('ul');
+      groups[g].forEach(e => ul.appendChild(makeItemRow(e)));
+      box.appendChild(ul);
+    });
+  } else {
+    const ul = document.createElement('ul');
+    entries.forEach(e => ul.appendChild(makeItemRow(e)));
+    box.appendChild(ul);
+  }
+
+  const missing = items.filter(needsGenre).length;
+  if (missing) {
+    $('genreNote').style.display = 'block';
+    $('genreNote').textContent = missing + ' title' + (missing === 1 ? ' has' : 's have') +
+      ' no genre yet, usually because they were added before genres were supported. The button below looks them up on TMDb.';
+    $('fillRow').style.display = 'flex';
+    $('fillBtn').textContent = 'Update genres for ' + missing + ' title' + (missing === 1 ? '' : 's');
+  } else {
+    $('genreNote').style.display = 'none';
+    $('fillRow').style.display = 'none';
+  }
+}
+
 async function fillGenres() {
-  const todo = items.filter(i => !i.genres || !i.genres.length || i.genres[0] === 'Uncategorized');
-  if (!todo.length) { status('Nothing to fill in'); return; }
+  const todo = items.filter(needsGenre);
+  if (!todo.length) return;
   let n = 0;
   for (const it of todo) {
-    status('Filling genres: ' + (++n) + ' of ' + todo.length);
+    status('Updating genres: ' + (++n) + ' of ' + todo.length);
     const info = await fetchGenreAndYear(cleanTitle(it.title));
     if (info && info.error) { status(info.error); break; }
     if (info) {
       it.tmdbId = info.tmdbId;
       it.year = info.year;
+      it.poster = info.poster || it.poster;
       it.genres = info.genres.length ? info.genres : ['Uncategorized'];
     }
   }
   persist();
   render();
-  if (!status.lastError) status('Done');
-}
-
-
-function render() {
-  $('collView').style.display = view === 'collection' ? 'block' : 'none';
-  $('wishView').style.display = view === 'wish' ? 'block' : 'none';
-  $('tabColl').className = view === 'collection' ? '' : 'inactive';
-  $('tabWish').className = view === 'wish' ? '' : 'inactive';
-  renderCollection();
-  renderWishes();
-}
-
-function renderCollection() {
-  $('count').textContent = items.length + ' movies';
-  const groups = {};
-  items.forEach((it, idx) => {
-    const g = (it.genres && it.genres[0]) || 'Uncategorized';
-    (groups[g] = groups[g] || []).push({ it, idx });
-  });
-  const box = $('collList');
-  box.innerHTML = '';
-  Object.keys(groups).sort().forEach(g => {
-    const h = document.createElement('h3');
-    h.textContent = g + ' (' + groups[g].length + ')';
-    box.appendChild(h);
-    const ul = document.createElement('ul');
-    groups[g].sort((a, b) => a.it.title.localeCompare(b.it.title)).forEach(({ it, idx }) => {
-      const li = document.createElement('li');
-      const t = document.createElement('div');
-      t.className = 'title';
-      t.textContent = it.title + (it.year ? ' (' + it.year + ')' : '');
-      const wrap = document.createElement('div');
-      wrap.className = 'rowitem';
-      if (it.poster) {
-        const img = document.createElement('img');
-        img.className = 'thumb';
-        img.src = 'https://image.tmdb.org/t/p/w92' + it.poster;
-        img.alt = '';
-        img.loading = 'lazy';
-        wrap.appendChild(img);
-      }
-      wrap.appendChild(t);
-      t.onclick = () => {
-        const nt = prompt('Edit title:', it.title);
-        if (nt && nt.trim()) { items[idx].title = nt.trim(); persist(); render(); }
-      };
-      const del = document.createElement('button');
-      del.textContent = 'Delete';
-      del.className = 'danger';
-      del.onclick = () => {
-        if (confirm('Delete "' + it.title + '"?')) { items.splice(idx, 1); persist(); render(); }
-      };
-      li.append(wrap, del);
-      ul.appendChild(li);
-    });
-    box.appendChild(ul);
-  });
+  status('Genres updated.');
 }
 
 function renderWishes() {
@@ -470,31 +549,68 @@ function renderWishes() {
   });
 }
 
+function render() {
+  $('collView').style.display = view === 'collection' ? 'block' : 'none';
+  $('wishView').style.display = view === 'wish' ? 'block' : 'none';
+  $('tabColl').className = view === 'collection' ? '' : 'inactive';
+  $('tabWish').className = view === 'wish' ? '' : 'inactive';
+  $('groupBy').value = prefs.groupBy;
+  $('sortBy').value = prefs.sortBy;
+  renderCollection();
+  renderWishes();
+}
+
+/* ---------- Export ---------- */
+function download(text, filename, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = filename;
+  a.click();
+}
+
+function exportTitles() {
+  const entries = sortEntries(items.map((it, idx) => ({ it, idx })));
+  const text = entries.map(e => e.it.title).join('\n');
+  download(text + '\n', 'kollector-titles.txt', 'text/plain');
+}
+
+function exportByGenre() {
+  const entries = sortEntries(items.map((it, idx) => ({ it, idx })));
+  const groups = groupEntries(entries);
+  const text = Object.keys(groups).sort().map(g =>
+    g + '\n' + groups[g].map(e => e.it.title).join('\n')
+  ).join('\n\n');
+  download(text + '\n', 'kollector-by-genre.txt', 'text/plain');
+}
+
 function exportCsv() {
   const rows = [['title', 'year', 'genre', 'upc', 'added']];
   items.forEach(i => rows.push([i.title, i.year || '', (i.genres || []).join('; '), i.upc || '', i.added]));
   const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  a.download = 'kollector.csv';
-  a.click();
+  download(csv, 'kollector.csv', 'text/csv');
 }
 
 /* ---------- Wiring ---------- */
+$('scanBtn').onclick = () => (cameraRunning ? stopCamera() : startCamera());
+$('searchBtn').onclick = searchTitle;
+$('searchInput').onkeydown = e => { if (e.key === 'Enter') searchTitle(); };
+$('exportBtn').onclick = () => { $('exportModal').style.display = 'flex'; };
+$('exCancel').onclick = () => { $('exportModal').style.display = 'none'; };
+$('exTitles').onclick = () => { $('exportModal').style.display = 'none'; exportTitles(); };
+$('exGenre').onclick = () => { $('exportModal').style.display = 'none'; exportByGenre(); };
+$('exCsv').onclick = () => { $('exportModal').style.display = 'none'; exportCsv(); };
+$('groupBy').onchange = e => { prefs.groupBy = e.target.value; persist(); render(); };
+$('sortBy').onchange = e => { prefs.sortBy = e.target.value; persist(); render(); };
+$('fillBtn').onclick = fillGenres;
+$('wishBtn').onclick = addWish;
+$('tabColl').onclick = () => { view = 'collection'; render(); };
+$('tabWish').onclick = () => { view = 'wish'; render(); };
 $('mSearchBtn').onclick = searchInModal;
 $('mSearch').onkeydown = e => { if (e.key === 'Enter') searchInModal(); };
 $('mYes').onclick = confirmAdd;
 $('mNo').onclick = () => { status('Skipped'); closeModal(); };
 $('mRescan').onclick = () => { closeModal(); rescan(); };
-$('rescanBtn').onclick = rescan;
-$('manualBtn').onclick = () => { handleScan($('manualUpc').value); $('manualUpc').value = ''; };
-$('exportBtn').onclick = exportCsv;
-$('fillBtn').onclick = fillGenres;
-$('wishBtn').onclick = addWish;
-$('tabColl').onclick = () => { view = 'collection'; render(); };
-$('tabWish').onclick = () => { view = 'wish'; render(); };
 
-startCamera();
 render();
 </script>
 </body>
